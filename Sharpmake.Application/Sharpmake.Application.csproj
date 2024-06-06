@@ -34,6 +34,7 @@
     <!-- MsBuild will properly handle the skip if needed. -->
     <!-- https://github.com/dotnet/project-system/blob/main/docs/repo/up-to-date-check-implementation.md -->
     <DisableFastUpToDateCheck>True</DisableFastUpToDateCheck>
+    <BaseOutputPath>..\..\SharpmakeBinarys</BaseOutputPath>
   </PropertyGroup>
 
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
