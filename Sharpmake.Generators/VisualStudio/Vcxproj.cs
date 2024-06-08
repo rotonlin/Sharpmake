@@ -153,7 +153,7 @@ namespace Sharpmake.Generators.VisualStudio
 
         public const string ProjectExtension = ".vcxproj";
         private const string ProjectFilterExtension = ".filters";
-        private const string CopyDependenciesExtension = "_runtimedependencies.txt";
+        private const string CopyDependenciesExtension = "_runtimedependencies.deps";
         public const string EventSeparator = "&#x0D;&#x0A;";
 
         // Vcxproj only allows one file command per input file, so we collapse
