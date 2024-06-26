@@ -87,6 +87,57 @@ namespace Sharpmake
             conf.TargetCopyFiles.Add(Path.Combine(CargoTargetDir, "[target.Optimization]", libName));
         }
 
+        /// <summary>
+        /// Adds a Rust build step to the Configuration, for the specified Target.
+        /// </summary>
+        /// <param name="conf">Project configuration for current target.</param>
+        /// <param name="target">Current target.</param>
+        protected void AddCargoBuildStep(Configuration conf, Target target)
+        {
+            conf.ProjectFileName = "[project.Name]";
+
+            // Link required Windows libraries
+            if (target.Platform == Platform.win64)
+            {
+                conf.LibraryFiles.Add("userenv");
+                conf.LibraryFiles.Add("ws2_32");
+                conf.LibraryFiles.Add("Bcrypt");
+                conf.LibraryFiles.Add("ntdll");
+            }
+
+            string libName;
+            switch (target.Platform)
+            {
+                case Platform.win32:
+                case Platform.win64:
+                {
+                    string ext = ".lib";
+                    if (conf.Output == Configuration.OutputType.Dll)
+                    {
+                        ext = ".dll";
+                    }
+                    libName = Name + ext;
+                }
+                break;
+
+                case Platform.ios:
+                case Platform.linux:
+                case Platform.mac:
+                    libName = "lib" + Name + ".a";
+                    break;
+
+                default:
+                    throw new ArgumentException(String.Format("Unknown library extension for platform: {0}", target.Platform));
+            }
+
+            _cargoBuildStep = new CargoBuildStep(target, CargoTargetDir, ManifestPath, libName);
+            conf.CustomFileBuildSteps.Add(_cargoBuildStep);
+
+            if (conf.Output == Configuration.OutputType.Dll)
+            {
+                conf.TargetCopyFiles.Add(Path.Combine(CargoTargetDir, "[target.Optimization]", libName));
+            }
+        }
         public override void PostResolve()
         {
             base.PostResolve();
