@@ -22,7 +22,7 @@ namespace Sharpmake.Generators.VisualStudio
         All,
     }
 
-    public class ProjectOptionsGenerator
+    public partial class ProjectOptionsGenerator
     {
         // Only MacOS have a subfolder, refer to https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFBundles/BundleTypes/BundleTypes.html
         private static readonly string AppleAppBinaryRootFolderForMac = "Contents" + XCodeProj.FolderSeparator + "MacOS" + XCodeProj.FolderSeparator;
@@ -236,6 +236,7 @@ namespace Sharpmake.Generators.VisualStudio
         {
             var forcedIncludes = new Strings();
 
+            bool useClang = context.Configuration.Platform.IsUsingClang();
             bool useClangCl = Options.GetObject<Options.Vc.General.PlatformToolset>(context.Configuration).IsLLVMToolchain() &&
                               Options.GetObject<Options.Vc.LLVM.UseClangCl>(context.Configuration) == Options.Vc.LLVM.UseClangCl.Enable;
 
@@ -260,8 +261,10 @@ namespace Sharpmake.Generators.VisualStudio
                     context.Options["ForcedIncludeFilesVanilla"] = context.Configuration.ForcedIncludes.JoinStrings(";");
 
                 StringBuilder result = new StringBuilder();
+                var platformDescriptor = PlatformRegistry.Get<IPlatformDescriptor>(context.Configuration.Platform);
+                string defaultCmdLineForceIncludePrefix = platformDescriptor.IsUsingClang ? @"-include""" : @"/FI""";
                 foreach (var forcedInclude in forcedIncludes)
-                    result.Append(@"/FI""" + forcedInclude + @""" ");
+                    result.Append(defaultCmdLineForceIncludePrefix + forcedInclude + @""" ");
                 result.Remove(result.Length - 1, 1);
                 context.CommandLineOptions["ForcedIncludeFiles"] = result.ToString();
             }
@@ -365,46 +368,6 @@ namespace Sharpmake.Generators.VisualStudio
                 );
             }
 
-            // MSVC NMake IntelliSence options
-
-            context.Options["AdditionalOptions"] = (context.Configuration.CustomBuildSettings is null) ? FileGeneratorUtilities.RemoveLineTag : context.Configuration.CustomBuildSettings.AdditionalOptions;
-
-            string cppLanguageStd = null;
-            if (context.Configuration.CustomBuildSettings is null || context.Configuration.CustomBuildSettings.AutoConfigure)
-            {
-                context.SelectOption
-                (
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.CPP98, () => { }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.CPP11, () => { }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.CPP14, () => { cppLanguageStd = "/std:c++14"; }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.CPP17, () => { cppLanguageStd = "/std:c++17"; }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.CPP20, () => { cppLanguageStd = "/std:c++20"; }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.GNU98, () => { }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.GNU11, () => { }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.GNU14, () => { cppLanguageStd = "/std:c++14"; }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.GNU17, () => { cppLanguageStd = "/std:c++17"; }),
-                Options.Option(Options.Vc.Compiler.CppLanguageStandard.Latest, () => { cppLanguageStd = "/std:c++latest"; })
-                );
-            }
-
-            if (!string.IsNullOrEmpty(cppLanguageStd))
-            {
-                if (string.IsNullOrEmpty(context.Options["AdditionalOptions"]) || context.Options["AdditionalOptions"] == FileGeneratorUtilities.RemoveLineTag)
-                    context.Options["AdditionalOptions"] = cppLanguageStd;
-                else
-                    context.Options["AdditionalOptions"] += $" {cppLanguageStd}";
-            }
-            else if (string.IsNullOrEmpty(context.Options["AdditionalOptions"]))
-            {
-                context.Options["AdditionalOptions"] = FileGeneratorUtilities.RemoveLineTag;
-            }
-
-            if (useClangCl && context.Options["AdditionalOptions"] != FileGeneratorUtilities.RemoveLineTag)
-            {
-                // need to use a special syntax when compiler is clang or Visual Studio will generate intellisense errors
-                context.Options["AdditionalOptions"] = context.Options["AdditionalOptions"].Replace("/std:c++", "/Clangstdc++");
-            }
-
             // Compiler section
 
             context.SelectOption
@@ -444,6 +407,50 @@ namespace Sharpmake.Generators.VisualStudio
             Options.Option(Options.Vc.General.WholeProgramOptimization.Optimize, () => { context.Options["WholeProgramOptimization"] = "PGOptimize"; context.Options["CompilerWholeProgramOptimization"] = "true"; context.CommandLineOptions["CompilerWholeProgramOptimization"] = "/GL"; }),
             Options.Option(Options.Vc.General.WholeProgramOptimization.Update, () => { context.Options["WholeProgramOptimization"] = "PGUpdate"; context.Options["CompilerWholeProgramOptimization"] = "true"; context.CommandLineOptions["CompilerWholeProgramOptimization"] = "/GL"; })
             );
+
+            // Options.Clang.Compiler.ProfileGuidedOptimization.Use
+            string usePGODataCompilerOption = FileGeneratorUtilities.RemoveLineTag;
+            string usePGODataPath = Options.PathOption.Get<Options.Clang.Compiler.ProfileGuidedOptimization.Use>(context.Configuration, FileGeneratorUtilities.RemoveLineTag, context.ProjectDirectoryCapitalized);
+            if (usePGODataPath != FileGeneratorUtilities.RemoveLineTag)
+            {
+                string formattedPath = FormatCommandLineOptionPath(context, usePGODataPath);
+                usePGODataCompilerOption = $"-fprofile-use={formattedPath}";
+                context.Configuration.AdditionalCompilerOptions.Add("-Wno-backend-plugin");
+            }
+            context.CommandLineOptions["UseProfileGuidedOptimizationData"] = usePGODataCompilerOption;
+
+            // Options.Clang.Compiler.ProfileGuidedOptimization.Generate
+            // Options.Clang.Compiler.ProfileGuidedOptimization.GenerateCS
+            string generatePGODataCompilerOption = FileGeneratorUtilities.RemoveLineTag;
+            string generatePGODataPath = Options.PathOption.Get<Options.Clang.Compiler.ProfileGuidedOptimization.Generate>(context.Configuration, FileGeneratorUtilities.RemoveLineTag, context.ProjectDirectoryCapitalized);
+            string generateCSPGODataPath = Options.PathOption.Get<Options.Clang.Compiler.ProfileGuidedOptimization.GenerateCS>(context.Configuration, FileGeneratorUtilities.RemoveLineTag, context.ProjectDirectoryCapitalized); 
+            if (generatePGODataPath != FileGeneratorUtilities.RemoveLineTag && generateCSPGODataPath != FileGeneratorUtilities.RemoveLineTag)
+            {
+                string generatePGODataOptionName = typeof(Options.Clang.Compiler.ProfileGuidedOptimization.Generate).FullName.Replace("+", ".");
+                string generateCSPGODataOptionName = typeof(Options.Clang.Compiler.ProfileGuidedOptimization.GenerateCS).FullName.Replace("+", ".");
+                throw new Error($"Error in the configuration of {context.Configuration.ProjectName}: {generatePGODataOptionName} and {generateCSPGODataOptionName} cannot be used together.");
+            }
+            else if (generatePGODataPath != FileGeneratorUtilities.RemoveLineTag)
+            {
+                string generatePGODataCompilerOptionPrefix = "-fprofile-generate";
+                generatePGODataCompilerOption = generatePGODataCompilerOptionPrefix;
+                if (generatePGODataPath != null)
+                {
+                    string formattedPath = FormatCommandLineOptionPath(context, generatePGODataPath);
+                    generatePGODataCompilerOption = $"{generatePGODataCompilerOptionPrefix}={formattedPath}";
+                }
+            }
+            else if (generateCSPGODataPath != FileGeneratorUtilities.RemoveLineTag)
+            {
+                string generateCSPGODataCompilerOptionPrefix = "-fcs-profile-generate";
+                generatePGODataCompilerOption = generateCSPGODataCompilerOptionPrefix;
+                if (generateCSPGODataPath != null)
+                {
+                    string formattedPath = FormatCommandLineOptionPath(context, generateCSPGODataPath);
+                    generatePGODataCompilerOption = $"{generateCSPGODataCompilerOptionPrefix}={formattedPath}";
+                }
+            }
+            context.CommandLineOptions["GenerateProfileGuidedOptimizationData"] = generatePGODataCompilerOption;
 
             optionsContext.PlatformVcxproj.SelectApplicationFormatOptions(context);
             optionsContext.PlatformVcxproj.SelectBuildType(context);
@@ -693,6 +700,28 @@ namespace Sharpmake.Generators.VisualStudio
             (
             Options.Option(Options.Vc.Compiler.KeepComment.Disable, () => { context.Options["KeepComments"] = "false"; context.CommandLineOptions["KeepComments"] = FileGeneratorUtilities.RemoveLineTag; }),
             Options.Option(Options.Vc.Compiler.KeepComment.Enable, () => { context.Options["KeepComments"] = "true"; context.CommandLineOptions["KeepComments"] = "/C"; })
+            );
+
+            //Options.Vc.Compiler.UseStandardConformingPreprocessor.    See: https://learn.microsoft.com/en-us/cpp/build/reference/zc-preprocessor?view=msvc-170
+            //    Disable                                 /Zc:preprocessor-
+            //    Enable                                  /Zc:preprocessor
+            context.SelectOption
+            (
+            Options.Option(Options.Vc.Compiler.UseStandardConformingPreprocessor.Default, () =>
+            {
+                context.Options["UseStandardConformingPreprocessor"] = FileGeneratorUtilities.RemoveLineTag;
+                context.CommandLineOptions["UseStandardConformingPreprocessor"] = FileGeneratorUtilities.RemoveLineTag;
+            }),
+            Options.Option(Options.Vc.Compiler.UseStandardConformingPreprocessor.Disable, () =>
+            {
+                context.Options["UseStandardConformingPreprocessor"] = "false";
+                context.CommandLineOptions["UseStandardConformingPreprocessor"] = "/Zc:preprocessor-";
+            }),
+            Options.Option(Options.Vc.Compiler.UseStandardConformingPreprocessor.Enable, () =>
+            {
+                context.Options["UseStandardConformingPreprocessor"] = "true";
+                context.CommandLineOptions["UseStandardConformingPreprocessor"] = "/Zc:preprocessor";
+            })
             );
 
             //Options.Vc.Compiler.StringPooling.
@@ -1133,6 +1162,13 @@ namespace Sharpmake.Generators.VisualStudio
             // UndefineAllPreprocessorDefinitions
             context.CommandLineOptions["UndefineAllPreprocessorDefinitions"] = FileGeneratorUtilities.RemoveLineTag;
 
+            // Options.Clang.Compiler.ValueProfileCountersPerSite
+            string valueProfileCountersPerSite = Options.IntOption.Get<Options.Clang.Compiler.ValueProfileCountersPerSite>(context.Configuration);
+            if (valueProfileCountersPerSite != FileGeneratorUtilities.RemoveLineTag)
+            {
+                context.Configuration.AdditionalCompilerOptions.Add($"-Xclang -mllvm -Xclang -vp-counters-per-site={valueProfileCountersPerSite}");
+            }
+
             optionsContext.PlatformVcxproj.SelectPrecompiledHeaderOptions(context);
 
             // Default defines...
@@ -1172,7 +1208,9 @@ namespace Sharpmake.Generators.VisualStudio
             }
 
             // We need to merge together AdditionalCompilerOptions and AdditionalCompilerOptimizeOptions for writing them on a single line in vcxproj files.
-            string[] allAdditionalOptions = new string[] { optionResults[0], optionResults[1] };
+            // WORKAROUND: we also add the Clang profile-guided-optimization options if they have been provided.
+            // This is needed because vcxproj does not directly support those options and adding the options in Project.Configuration.AdditionalCompilerOptions ends up duplicating them in the BFF.
+            string[] allAdditionalOptions = new string[] { optionResults[0], optionResults[1], context.CommandLineOptions["UseProfileGuidedOptimizationData"], context.CommandLineOptions["GenerateProfileGuidedOptimizationData"] };
             var nonEmptyOptions = allAdditionalOptions.Where(a => a != FileGeneratorUtilities.RemoveLineTag);
             if (nonEmptyOptions.Any())
             {
@@ -1184,6 +1222,43 @@ namespace Sharpmake.Generators.VisualStudio
             }
 
             optionsContext.HasClrSupport = clrSupport;
+
+            //--------------------------------
+            // MSVC NMake IntelliSence options
+            //--------------------------------
+
+            // Handle C++ language version option
+            string intellisenseCppLanguageStandard;
+            if (!context.CommandLineOptions.TryGetValue("LanguageStandard", out intellisenseCppLanguageStandard) || intellisenseCppLanguageStandard == FileGeneratorUtilities.RemoveLineTag)
+            {
+                if (!context.CommandLineOptions.TryGetValue("CppLanguageStd", out intellisenseCppLanguageStandard))
+                    intellisenseCppLanguageStandard = FileGeneratorUtilities.RemoveLineTag;
+            }
+
+            if (intellisenseCppLanguageStandard != FileGeneratorUtilities.RemoveLineTag)
+            {
+                if (useClangCl || useClang)
+                {
+                    // need to use a special syntax when compiler is clang/clangcl or Visual Studio will generate intellisense errors
+                    intellisenseCppLanguageStandard = intellisenseCppLanguageStandard.Replace("/std:c++", "/Clangstdc++");
+                    intellisenseCppLanguageStandard = intellisenseCppLanguageStandard.Replace("-std=c++", "/Clangstdc++");
+                }
+            }
+
+            // Merge the intellisense language option with additional intellisense command line options
+            string intellisenseCommandLineOptions = intellisenseCppLanguageStandard;
+            Strings intellisenseAdditionalCommandlineOptions = context.Configuration.IntellisenseAdditionalCommandLineOptions;
+            if (intellisenseAdditionalCommandlineOptions != null)
+            {
+                if (intellisenseCommandLineOptions != FileGeneratorUtilities.RemoveLineTag)
+                    intellisenseCommandLineOptions += " ";
+                intellisenseCommandLineOptions += string.Join(' ', intellisenseAdditionalCommandlineOptions);
+            }
+            context.Options["IntellisenseCommandLineOptions"] = intellisenseCommandLineOptions;
+
+            // Add additional defines for intellisense to the default ones set for that target.
+            Strings intellisenseDefines = context.Configuration.IntellisenseAdditionalDefines;
+            context.Options["IntellisenseAdditionalDefines"] = intellisenseDefines != null ? ";" + String.Join(';', intellisenseDefines) : "";
         }
 
         public static List<KeyValuePair<string, string>> ConvertPostBuildCopiesToRelative(Project.Configuration conf, string relativeTo)
@@ -1851,6 +1926,17 @@ namespace Sharpmake.Generators.VisualStudio
                 linkerAdditionalOptions += ignoredLinkerWarnings;
             }
 
+            // Treat Options.Clang.Linker.ExtTspBlockPlacement here because
+            // it does not have a specific line in the vcxproj
+            Options.Clang.Linker.ExtTspBlockPlacement extTSPBlockPlacement = Options.GetObject<Options.Clang.Linker.ExtTspBlockPlacement>(context.Configuration);
+            if (extTSPBlockPlacement == Options.Clang.Linker.ExtTspBlockPlacement.Enable)
+            {
+                if (linkerAdditionalOptions.Length > 0)
+                    linkerAdditionalOptions += " ";
+                string mllvmLinkerPrefix = context.Configuration.Platform.IsMicrosoft() ? "-mllvm:" : "-Wl,-mllvm,";
+                linkerAdditionalOptions += $"{mllvmLinkerPrefix}-enable-ext-tsp-block-placement=1";
+            }
+
             context.Options["AdditionalLibrarianOptions"] = additionalLibrarianOptions.Length > 0 ? additionalLibrarianOptions : FileGeneratorUtilities.RemoveLineTag;
             context.Options["AdditionalLinkerOptions"] = linkerAdditionalOptions.Length > 0 ? linkerAdditionalOptions : FileGeneratorUtilities.RemoveLineTag;
         }
@@ -1862,24 +1948,38 @@ namespace Sharpmake.Generators.VisualStudio
 
             Strings manifestInputs = new Strings();
 
-            string vsManifestFilesPath = Util.SimplifyPath(Path.Combine(context.DevelopmentEnvironment.GetVisualStudioVCRootPath(), "Include", "Manifest"));
+            bool generateManifestFile = false;
 
             //EnableDpiAwareness
+            // Yes and PerMonitor both map to the same value, since dpi scaling really doesn't work well in windows 10+ without PerMonitorV2 specified.
+            // This should be safe for older versions too, according to msdn documentation (see link below): "On older versions of Windows, the newer <dpiAwareness> tag will be ignored."
+            // https://learn.microsoft.com/en-us/windows/win32/hidpi/setting-the-default-dpi-awareness-for-a-process#setting-default-awareness-with-the-application-manifest
             context.SelectOption
             (
             Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.Default, () => { context.Options["EnableDpiAwareness"] = FileGeneratorUtilities.RemoveLineTag; }),
-            Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.Yes, () => { context.Options["EnableDpiAwareness"] = "true"; manifestInputs.Add(Path.Combine(vsManifestFilesPath, "dpiaware.manifest")); }),
-            Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.PerMonitor, () => { context.Options["EnableDpiAwareness"] = "PerMonitorHighDPIAware"; manifestInputs.Add(Path.Combine(vsManifestFilesPath, "PerMonitorHighDPIAware.manifest")); }),
+            Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.Yes, () => { context.Options["EnableDpiAwareness"] = "PerMonitorHighDPIAware"; generateManifestFile = true; }),
+            Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.PerMonitor, () => { context.Options["EnableDpiAwareness"] = "PerMonitorHighDPIAware"; generateManifestFile = true; }),
             Options.Option(Options.Vc.ManifestTool.EnableDpiAwareness.No, () => { context.Options["EnableDpiAwareness"] = "false"; })
             );
 
-            if (context.Configuration.AdditionalManifestFiles.Count > 0)
+            if (generateManifestFile)
             {
-                context.Options["AdditionalManifestFiles"] = string.Join(";", Util.PathGetRelative(context.ProjectDirectory, context.Configuration.AdditionalManifestFiles));
-                manifestInputs.AddRange(context.Configuration.AdditionalManifestFiles);
+                var fileGenerator = new XmlFileGenerator();
+                fileGenerator.Write(Template.Manifest.FileBegin);
+                fileGenerator.Write(Template.Manifest.DPIAwarenessSettings);
+                fileGenerator.Write(Template.Manifest.FileEnd);
+
+                string projFilePath = context.Configuration.ProjectFullFileName;
+                projFilePath = projFilePath.Replace('.', '_');
+
+                FileInfo projectFileInfo = new FileInfo(projFilePath + ".manifest");
+                context.Builder.Context.WriteGeneratedFile(context.Project.GetType(), projectFileInfo, fileGenerator);
+               
+                manifestInputs.Add(projectFileInfo.FullName);
             }
-            else
-                context.Options["AdditionalManifestFiles"] = FileGeneratorUtilities.RemoveLineTag;
+
+            if (context.Configuration.AdditionalManifestFiles.Count > 0)
+                manifestInputs.AddRange(context.Configuration.AdditionalManifestFiles);
 
             if (manifestInputs.Count > 0)
             {
@@ -1887,12 +1987,25 @@ namespace Sharpmake.Generators.VisualStudio
                 if (embedManifest == Options.Vc.Linker.EmbedManifest.No)
                     throw new NotImplementedException("Sharpmake does not support manifestinputs without embedding the manifest!");
 
-                var cmdManifests = manifestInputs.Select(p => Bff.CmdLineConvertIncludePathsFunc(context, optionsContext.Resolver, p, "/manifestinput:"));
+                if (context.Configuration.IsFastBuild)
+                {
+                    var cmdManifests = manifestInputs.Select(p => Bff.CmdLineConvertIncludePathsFunc(context, optionsContext.Resolver, p, "/manifestinput:"));
 
-                context.CommandLineOptions["ManifestInputs"] = string.Join($"'{Environment.NewLine}                            + ' ", cmdManifests);
+                    // With fastbuild, manifest references are added to the .bff file via command line
+                    context.Options["AdditionalManifestFiles"] = FileGeneratorUtilities.RemoveLineTag;
+                    context.CommandLineOptions["ManifestInputs"] = string.Join($"'{Environment.NewLine}                            + ' ", cmdManifests);
+                }
+                else
+                {
+                    // With msbuild, manifest references are added to the .vcxproj file via the AdditionalManifestFiles field
+                    // See VcxProj.cs -> Template.Project.ProjectConfigurationsManifestTool use
+                    context.Options["AdditionalManifestFiles"] = string.Join(";", Util.PathGetRelative(context.ProjectDirectory, manifestInputs));
+                    context.CommandLineOptions["ManifestInputs"] = FileGeneratorUtilities.RemoveLineTag;
+                }
             }
             else
             {
+                context.Options["AdditionalManifestFiles"] = FileGeneratorUtilities.RemoveLineTag;
                 context.CommandLineOptions["ManifestInputs"] = FileGeneratorUtilities.RemoveLineTag;
             }
         }

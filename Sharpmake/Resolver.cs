@@ -93,6 +93,17 @@ namespace Sharpmake
     /// </summary>
     public class Resolver
     {
+        /// <summary>
+        /// This enumeration can be used to implement conditions or validations based on the resolve state.
+        /// </summary>
+        public enum ResolveStates
+        {
+            NotResolved, // The object is not resolved
+            InProgress, // The object is currently being resolved
+            Resolved // The object has been resolved.
+        };
+
+
         private class TypeWrapper
         {
             public List<MemberInfo> MemberInfos;
@@ -796,6 +807,24 @@ namespace Sharpmake
                                     if (wasChanged)
                                         values.UpdateValue(value, newValue);
                                 }
+                            }
+
+                            SetResolved(memberPath);
+                        }
+                    }
+                    else if (fieldValue is OrderableStrings)
+                    {
+                        if (CanWriteFieldValue(fieldInfo))
+                        {
+                            SetResolving(memberPath);
+                            OrderableStrings values = fieldValue as OrderableStrings;
+
+                            for (int i = 0; i < values.Count; ++i)
+                            {
+                                bool wasChanged;
+                                string value = Resolve(values[i], fallbackValue, out wasChanged);
+                                if (wasChanged)
+                                    i = values.SetOrRemoveAtIndex(i, value);
                             }
 
                             SetResolved(memberPath);

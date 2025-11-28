@@ -359,16 +359,24 @@ namespace Sharpmake
                 _builderContext = builderContext;
                 AllParsers = assembler.ComputeParsers();
                 AllParsingFlowParsers = assembler.ComputeParsingFlowParsers();
-                _assemblyInfo._sourceFiles.AddRange(sources);
-                _visiting = new Strings(new FileSystemStringComparer(), sources);
+                //Make sure to use clean files path
+                var cleanSourceFiles = sources?.Select(s => Path.GetFullPath(s));
+                _assemblyInfo._sourceFiles.AddRange(cleanSourceFiles);
+                _visiting = new Strings(new FileSystemStringComparer(), cleanSourceFiles);
             }
 
             public void AddSourceFile(string file)
             {
-                if (!_visiting.Contains(file))
+                //Make sure to use clean file path
+                //To avoid ambiguity for example, consider these 2 file paths
+                //F:\my_workspace\git\XXX\.\XXX.sharpmake.cs
+                //F:\my_workspace\git\XXX\XXX.sharpmake.cs
+                var cleanFilePath = Path.GetFullPath(file);
+
+                if (!_visiting.Contains(cleanFilePath))
                 {
-                    _assemblyInfo._sourceFiles.Add(file);
-                    _visiting.Add(file);
+                    _assemblyInfo._sourceFiles.Add(cleanFilePath);
+                    _visiting.Add(cleanFilePath);
                 }
             }
 
@@ -452,25 +460,35 @@ namespace Sharpmake
             return assemblyInfo;
         }
 
+        private ConcurrentDictionary<string, string> _buildReferenceFullNames = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         private HashSet<string> GetReferencesForBuild()
         {
-            HashSet<string> references = new HashSet<string>();
+            // First find the assembly
+            Parallel.ForEach(_buildReferences, (buildAssemblyfile) =>
+            {
+                string fullPath = AssemblyName.GetAssemblyName(buildAssemblyfile).FullName;
+                _buildReferenceFullNames.TryAdd(fullPath, buildAssemblyfile);
+            });
+
+            var references = new ConcurrentDictionary<string, bool>();
 
             // Search if we have a more suitable build reference for each runtime reference
-            foreach (string assemblyFile in _references)
+            Parallel.ForEach(_references, (assemblyFile) =>
             {
                 var assemblyFullName = AssemblyName.GetAssemblyName(assemblyFile).FullName;
-                var buildAssemblyFile = _buildReferences.SingleOrDefault(buildAssemblyfile => string.Equals(assemblyFullName, AssemblyName.GetAssemblyName(buildAssemblyfile).FullName, StringComparison.OrdinalIgnoreCase));
-                references.Add(buildAssemblyFile ?? assemblyFile);
-            }
+                string buildAssemblyFile = null;
+                _buildReferenceFullNames.TryGetValue(assemblyFullName, out buildAssemblyFile);
+                references.TryAdd(buildAssemblyFile ?? assemblyFile, true);
+            });
 
             foreach (Assembly assembly in _assemblies)
             {
                 if (!assembly.IsDynamic)
-                    references.Add(assembly.Location);
+                    references.TryAdd(assembly.Location, true);
             }
 
-            return references;
+            return references.Keys.ToHashSet<string>();
         }
 
         private SourceText ReadSourceCode(string path)

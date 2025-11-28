@@ -2,6 +2,7 @@
 // Licensed under the Apache 2.0 License. See LICENSE.md in the project root for license information.
 
 using System;
+using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -16,7 +17,6 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.Setup.Configuration;
 using Microsoft.Win32;
@@ -25,6 +25,8 @@ namespace Sharpmake
 {
     public static partial class Util
     {
+        public static DateTime ProgramStartTime { get; } = DateTime.Now;
+
         public const string DoubleQuotes = @"""";
         public const string EscapedDoubleQuotes = @"\""";
 
@@ -145,27 +147,41 @@ namespace Sharpmake
         /// <returns>true=equal, false=not equal</returns>
         private static bool AreStreamsEqual(Stream stream1, Stream stream2)
         {
-            Span<byte> buffer1 = new byte[_FileStreamBufferSize];
-            Span<byte> buffer2 = new byte[_FileStreamBufferSize];
-
-            stream1.Position = 0;
-            stream2.Position = 0;
-
-            while (true)
+            byte[] buffer1=null;
+            byte[] buffer2=null;
+            try
             {
-                // Read from both streams
-                int count1 = stream1.Read(buffer1);
-                int count2 = stream2.Read(buffer2);
+                // Request buffers from shared pool to reduce pressure on GC.
+                buffer1 = ArrayPool<byte>.Shared.Rent(_FileStreamBufferSize);
+                buffer2 = ArrayPool<byte>.Shared.Rent(_FileStreamBufferSize);
 
-                if (count1 != count2)
-                    return false;
+                stream1.Position = 0;
+                stream2.Position = 0;
 
-                if (count1 == 0)
-                    return true;
+                while (true)
+                {
+                    // Read from both streams
+                    int count1 = stream1.Read(buffer1, 0, buffer1.Length);
+                    int count2 = stream2.Read(buffer2, 0, buffer2.Length);
 
-                // Compare the streams efficiently without any copy.
-                if (!buffer1.SequenceEqual(buffer2))
-                    return false;
+                    if (count1 != count2)
+                        return false;
+
+                    if (count1 == 0)
+                        return true;
+
+                    Span<byte> span1 = new Span<byte>(buffer1, 0, count1);
+                    Span<byte> span2 = new Span<byte>(buffer2, 0, count2);
+
+                    // Compare the streams efficiently without any copy.
+                    if (!span1.SequenceEqual(span2))
+                        return false;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer1);
+                ArrayPool<byte>.Shared.Return(buffer2);
             }
         }
 
@@ -278,16 +294,16 @@ namespace Sharpmake
 
         public static List<string> FilesAlternatesAutoCleanupDBSuffixes = new List<string>(); // The alternates db suffixes using by other context
         private static List<string> _FilesAlternatesAutoCleanupDBFullPaths = new List<string>();
-        public static string FilesAutoCleanupDBPath = string.Empty;
-        public static string FilesAutoCleanupDBSuffix = string.Empty;   // Current auto-cleanup suffix for the database.
+        public static string FilesAutoCleanupDBPath { get; set; } = string.Empty;
+        public static string FilesAutoCleanupDBSuffix { get; set; } = string.Empty;   // Current auto-cleanup suffix for the database.
         internal static bool s_forceFilesCleanup = false;
         internal static string s_overrideFilesAutoCleanupDBPath;
-        public static bool FilesAutoCleanupActive = false;
-        public static TimeSpan FilesAutoCleanupDelay = TimeSpan.Zero;
+
+        public static bool FilesAutoCleanupActive { get; set; }
+        public static TimeSpan FilesAutoCleanupDelay { get; set; } = TimeSpan.Zero;
         public static HashSet<string> FilesToBeExplicitlyRemovedFromDB = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
         public static HashSet<string> FilesAutoCleanupIgnoredEndings = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
         private const string s_filesAutoCleanupDBPrefix = "sharpmakeautocleanupdb";
-        private enum DBVersion { Version = 3 };
 
         private static JsonSerializerOptions GetCleanupDatabaseJsonSerializerOptions()
         {
@@ -295,48 +311,95 @@ namespace Sharpmake
             {
                 AllowTrailingCommas = true,
                 PropertyNamingPolicy = null,
-                WriteIndented = false,
+                WriteIndented = true,
             };
+        }
+
+        private class CleanupDatabaseContent
+        {
+            public enum DBVersions 
+            {
+                BinaryFormatterVersion = 3, // Json in a binary formatter - Deprecated - Support will be removed in the first version released after dec 31th 2024
+                JsonVersion = 4, // New format - simple json
+                CurrentVersion = JsonVersion
+            };
+
+            public DBVersions DBVersion { get; set; }
+            public object Data { get; set; }
         }
 
         private static Dictionary<string, DateTime> ReadCleanupDatabase(string databaseFilename)
         {
-            Dictionary<string, DateTime> dbFiles = null;
-            if (File.Exists(databaseFilename))
+            // DEPRECATED CODE - TO BE REMOVED AFTER DEC 31TH 2024
+            string oldDatabaseFormatFilename = Path.ChangeExtension(databaseFilename, ".bin");
+            if (File.Exists(oldDatabaseFormatFilename))
             {
                 try
                 {
                     // Read database - This is simply a simple binary file containing the list of file and a version number.
-                    using (Stream readStream = new FileStream(databaseFilename, FileMode.Open, FileAccess.Read, FileShare.None))
+                    using (Stream readStream = new FileStream(oldDatabaseFormatFilename, FileMode.Open, FileAccess.Read, FileShare.None))
                     using (BinaryReader binReader = new BinaryReader(readStream))
                     {
                         // Validate version number
                         int version = binReader.ReadInt32();
-                        if (version == (int)DBVersion.Version)
+                        if (version == (int)CleanupDatabaseContent.DBVersions.BinaryFormatterVersion)
                         {
                             // Read the list of files.
                             IFormatter formatter = new BinaryFormatter();
                             string dbAsJson = binReader.ReadString();
 
                             var tmpDbFiles = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, DateTime>>(dbAsJson, GetCleanupDatabaseJsonSerializerOptions());
-                            dbFiles = tmpDbFiles.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.InvariantCultureIgnoreCase);
+                            var dbFiles = tmpDbFiles.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.InvariantCultureIgnoreCase);
+
+                            // Converting to new format.
+                            WriteCleanupDatabase(databaseFilename, dbFiles);
+                            return dbFiles;
                         }
                         else
                         {
                             LogWrite("Warning: found cleanup database in incompatible format v{0}, skipped.", version);
                         }
-
-                        readStream.Close();
                     }
                 }
                 catch
                 {
-                    // File is likely corrupted.
-                    // This is no big deal except that cleanup won't occur.
-                    dbFiles = null;
+                    // nothing to do.
+                }
+                finally
+                {
+                    TryDeleteFile(oldDatabaseFormatFilename);
                 }
             }
-            return dbFiles;
+            // END DEPRECATED CODE
+
+            if (File.Exists(databaseFilename))
+            {
+                try
+                {
+                    string jsonString = File.ReadAllText(databaseFilename);
+                    var versionedDB = System.Text.Json.JsonSerializer.Deserialize<CleanupDatabaseContent>(jsonString);
+                    if (versionedDB.DBVersion == CleanupDatabaseContent.DBVersions.JsonVersion)
+                    {
+                        // Deserialize the Database to a dictionary
+                        var tmpDbFiles = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, DateTime>>(versionedDB.Data.ToString(), GetCleanupDatabaseJsonSerializerOptions());
+
+                        // Convert the dictionary to a case insensitive dictionary
+                        var dbFiles = tmpDbFiles.ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.InvariantCultureIgnoreCase);
+
+                        return dbFiles;
+                    }
+                    else
+                    {
+                        LogWrite($"Cleanup database version {versionedDB.DBVersion} is not supported. Ignoring database"); 
+                    }
+                }
+                catch
+                {
+                    // DB File is likely corrupted.
+                    // This is no big deal except that cleanup won't occur and this could result in files not written by the current Sharpmake run to not being deleted.
+                }
+            }
+            return null;
         }
 
         private static string GetDatabaseFilename(string dbSuffix)
@@ -344,7 +407,7 @@ namespace Sharpmake
             if (!string.IsNullOrWhiteSpace(s_overrideFilesAutoCleanupDBPath))
                 return s_overrideFilesAutoCleanupDBPath;
 
-            string databaseFilename = Path.Combine(FilesAutoCleanupDBPath, $"{s_filesAutoCleanupDBPrefix}{dbSuffix}.bin");
+            string databaseFilename = Path.Combine(FilesAutoCleanupDBPath, $"{s_filesAutoCleanupDBPrefix}{dbSuffix}.json");
             return databaseFilename;
         }
 
@@ -457,6 +520,18 @@ namespace Sharpmake
                         {
                             if (!FilesToBeExplicitlyRemovedFromDB.Contains(filenameDate.Key))
                             {
+                                // Exclude files that were modified since the beginning of the current Sharpmake run.
+                                // This should avoid regressions when a generated file is not added to cleanup database anymore.
+                                // Example: replacing a call to Util.FileWriteIfDifferent() with File.WriteAll()
+                                // From the previous run, Util.FileWriteIfDifferent() added the file in the cleanup database.
+                                // In the new run, File.WriteAll() wrote the file, but the cleanup system would want to delete it.
+                                if (File.GetLastWriteTime(filenameDate.Key) >= ProgramStartTime)
+                                {
+                                    LogWrite(@"Skip deleting old file (updated during this run): {0}", filenameDate.Key);
+                                    newDbFiles.Add(filenameDate.Key, filenameDate.Value);
+                                    continue;
+                                }
+
                                 LogWrite(@"Deleting old file: {0}", filenameDate.Key);
                                 if (!TryDeleteFile(filenameDate.Key))
                                 {
@@ -475,33 +550,24 @@ namespace Sharpmake
                 }
             }
 
-            // Write database if needed
-            if (newDbFiles.Count > 0)
-            {
-                using (Stream writeStream = new FileStream(databaseFilename, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (BinaryWriter binWriter = new BinaryWriter(writeStream))
-                {
-                    // Write version number
-                    int version = (int)DBVersion.Version;
-                    binWriter.Write(version);
-
-                    // Write the list of files.
-                    string dbAsJson = System.Text.Json.JsonSerializer.Serialize(newDbFiles, GetCleanupDatabaseJsonSerializerOptions());
-                    binWriter.Write(dbAsJson);
-                    binWriter.Flush();
-                }
-
-                if (addDBToAlternateDB)
-                    _FilesAlternatesAutoCleanupDBFullPaths.Add(databaseFilename);
-            }
-            else
-            {
-                TryDeleteFile(databaseFilename);
-            }
+            WriteCleanupDatabase(databaseFilename, newDbFiles);
+            if (addDBToAlternateDB)
+                _FilesAlternatesAutoCleanupDBFullPaths.Add(databaseFilename);
 
             // We are done! Clear the list of files to avoid problems as this context is now considered as complete.
             // For example if generating debug solution and then executing normal generation
             s_writtenFiles.Clear();
+        }
+
+        private static void WriteCleanupDatabase(string databaseFilename, Dictionary<string, DateTime> generatedFiles)
+        {
+            CleanupDatabaseContent dbContent = new CleanupDatabaseContent
+            {
+                DBVersion = CleanupDatabaseContent.DBVersions.CurrentVersion,
+                Data = generatedFiles
+            };
+            string jsonString = System.Text.Json.JsonSerializer.Serialize(dbContent, GetCleanupDatabaseJsonSerializerOptions());
+            File.WriteAllText(databaseFilename, jsonString);
         }
 
         public static string WinFormSubTypesDbPath = string.Empty;
@@ -1051,39 +1117,190 @@ namespace Sharpmake
             }
         }
 
+        [Obsolete("Use CreateOrUpdateSymbolicLink instead", error: true)]
         public static bool CreateSymbolicLink(string source, string target, bool isDirectory)
         {
-            bool success = false;
-            try
-            {
-                // In case the file is marked as readonly
-                if (File.Exists(source))
-                {
-                    File.SetAttributes(source, FileAttributes.Normal);
-                    File.Delete(source);
-                }
-                else if (Directory.Exists(source))
-                {
-                    Directory.Delete(source);
-                }
-
-                int releaseId = int.Parse(GetRegistryLocalMachineSubKeyValue(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "ReleaseId", "0"));
-
-                int flags = isDirectory ? SYMBOLIC_LINK_FLAG_DIRECTORY : SYMBOLIC_LINK_FLAG_FILE;
-                if (releaseId >= 1703) // Verify that the Windows build is equal or above 1703, as SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE was introduced at that version. Using it on older version will cause an error 87 and symlinks won't be created
-                    flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-
-                success = CreateSymbolicLink(source, target, flags);
-            }
-            catch { }
-            return success;
+            return false;
         }
 
-        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-        private static extern bool CreateSymbolicLink(string lpSymlinkFileName, string lpTargetFileName, int dwFlags);
-        private const int SYMBOLIC_LINK_FLAG_FILE = 0x0;
-        private const int SYMBOLIC_LINK_FLAG_DIRECTORY = 0x1;
-        private const int SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE = 0x2;
+        private static Lazy<bool> _UseElevatedShellForSymlinks = new (() => UseElevatedShellForSymlinks());
+        private static bool UseElevatedShellForSymlinks()
+        {
+            if (!OperatingSystem.IsWindows())
+                return false;
+
+            // Detect if we can create symlinks without elevation. We know a couple of cases where we can:
+            // 1) Running as administrator
+            // 2) Developer mode is enabled on Windows 10 and later
+            // 3) User is granted the SeCreateSymbolicLinkPrivilege privilege (typically via a group policy)
+            // We can test this by trying to create a temporary symlink and see if it works which.
+            // It is a lot simpler than trying to detect all those cases individually.
+            bool requiresElevation = true;
+            string tempSource = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            string tempTarget = null;
+            try
+            {
+                tempTarget = Path.GetTempFileName();
+                File.CreateSymbolicLink(tempSource, tempTarget);
+                requiresElevation = false;
+            }
+            catch
+            {
+            }
+            finally
+            {
+                try { File.Delete(tempSource); } catch { }
+                try { File.Delete(tempTarget); } catch { }
+            }
+
+            return requiresElevation;
+        }
+
+        public enum CreateOrUpdateSymbolicLinkResult
+        {
+            Created,
+            Updated,
+            AlreadyUpToDate
+        }
+
+        /// <summary>
+        /// Creates or updates a symbolic link from source to target.
+        /// </summary>
+        /// <remarks>
+        /// On Windows when not running as administrator, this method will attempt to use an elevated shell
+        /// to create the symbolic link (requires UAC elevation prompt). On other platforms or when running
+        /// as administrator, the managed APIs are used directly.
+        /// </remarks>
+        /// <param name="source">The path where the symbolic link will be created. Does not need to exist initially.</param>
+        /// <param name="target">The path the symbolic link will point to. Must exist.</param>
+        /// <param name="isDirectory">If true, creates a directory symbolic link; if false, creates a file symbolic link.</param>
+        /// <returns>
+        /// <see cref="CreateOrUpdateSymbolicLinkResult.Created"/> if a new symbolic link was created;
+        /// <see cref="CreateOrUpdateSymbolicLinkResult.Updated"/> if an existing symbolic link was updated to point to a different target;
+        /// <see cref="CreateOrUpdateSymbolicLinkResult.AlreadyUpToDate"/> if the symbolic link already points to the target.
+        /// </returns>
+        /// <exception cref="ArgumentException">Thrown if source or target paths are null or empty.</exception>
+        /// <exception cref="IOException">Thrown if source and target are the same path, or if link creation/update fails.</exception>
+        /// <exception cref="Exception">Thrown if the elevated shell fails to start (Windows only).</exception>
+        public static CreateOrUpdateSymbolicLinkResult CreateOrUpdateSymbolicLink(string source, string target, bool isDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(source))
+                throw new ArgumentException("Source path cannot be null or empty", nameof(source));
+            if (string.IsNullOrWhiteSpace(target))
+                throw new ArgumentException("Target path cannot be null or empty", nameof(target));
+
+            // Note: Can't have a slash at end of path and replacing alternate slashes so that resolved link target comparison works correctly
+            target = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar);
+            source = Path.GetFullPath(source).TrimEnd(Path.DirectorySeparatorChar);
+            if (source == target)
+            {
+                throw new IOException("Source and target paths are the same for symbolic link: " + source);
+            }
+
+            CreateOrUpdateSymbolicLinkResult result;
+            if (isDirectory)
+            {
+                if (Directory.Exists(source))
+                {
+                    var linkTarget = Directory.ResolveLinkTarget(source, false);
+                    if (linkTarget == null || linkTarget.FullName != target)
+                    {
+                        result = CreateOrUpdateSymbolicLinkResult.Updated;
+                        if (linkTarget == null)
+                        {
+                            Directory.Delete(source, true); // Not a symlink, delete recursively
+                        }
+                        else
+                        {
+                            Directory.Delete(source);
+                        }
+                    }
+                    else
+                    {
+                        result = CreateOrUpdateSymbolicLinkResult.AlreadyUpToDate;
+                    }
+                }
+                else
+                {
+                    result = CreateOrUpdateSymbolicLinkResult.Created;
+                }
+            }
+            else
+            {
+                if (File.Exists(source))
+                {
+                    var linkTarget = File.ResolveLinkTarget(source, false);
+                    if (linkTarget == null || linkTarget.FullName != target)
+                    {
+                        result = CreateOrUpdateSymbolicLinkResult.Updated;
+                        File.SetAttributes(source, FileAttributes.Normal);
+                        File.Delete(source);
+                    }
+                    else
+                    {
+                        result = CreateOrUpdateSymbolicLinkResult.AlreadyUpToDate;
+                    }
+                }
+                else
+                {
+                    result = CreateOrUpdateSymbolicLinkResult.Created;
+                }
+            }
+
+            switch (result)
+            {
+                case CreateOrUpdateSymbolicLinkResult.Updated:
+                    LogWrite($"Updating symbolic link: {source} => {target}");
+                    break;
+
+                case CreateOrUpdateSymbolicLinkResult.AlreadyUpToDate:
+                    LogWrite($"Symbolic link already up to date: {source} => {target}");
+                    return result; // nothing to do bail out
+
+                case CreateOrUpdateSymbolicLinkResult.Created:
+                    LogWrite($"Creating symbolic link: {source} => {target}");
+                    break;
+            }
+
+            // Create intermediate directories
+            Directory.CreateDirectory(Path.GetDirectoryName(source));
+
+            if (_UseElevatedShellForSymlinks.Value)
+            {
+                // Used to create symlink without requiring the whole process to be elevated
+                string command = $"mklink {(isDirectory ? "/D" : string.Empty)} \"{source}\" \"{target}\"";
+                string arguments = $"/C \"cd /D \"{Environment.CurrentDirectory}\" && {command}\"";
+                var processStartInfo = new ProcessStartInfo("cmd", arguments)
+                {
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                var process = Process.Start(processStartInfo);
+                if (process != null)
+                {
+                    process.WaitForExit();
+                    if (process.ExitCode != 0)
+                    {
+                        throw new IOException($"Failed creating or updating symbolic link with elevate shell, exited with code {process.ExitCode} for command: {command}");
+                    }
+                }
+                else
+                {
+                    throw new Exception($"Failed starting elevate shell to create or update symbolic link, command: {command}.");
+                }
+            }
+            else if (isDirectory)
+            {
+                Directory.CreateSymbolicLink(source, target);
+            }
+            else
+            {
+                File.CreateSymbolicLink(source, target);
+            }
+
+            return result;
+        }
 
         public static bool IsSymbolicLink(string path)
         {
@@ -1172,14 +1389,36 @@ namespace Sharpmake
 
             string libDir = Path.Combine(llvmInstallDir, "lib", "clang");
 
-            var versionFolder = DirectoryGetDirectories(libDir);
-            if (versionFolder.Length == 0)
+            // We expect folder lib/clang to contain only one subfolder which name is the clang version
+            // However in some cases like MacOS, there can be both "16" and "16.0.0", the latter being a symlink.
+            // In that case return the shorter one, which matches what we find on other platforms.
+            var versionFolders = DirectoryGetDirectories(libDir)
+                                .Select(s => Path.GetFileName(s))
+                                .Where(s => Regex.IsMatch(s, @"^\d+?(\.\d+?\.\d+?)?$", RegexOptions.Singleline | RegexOptions.CultureInvariant))
+                                .OrderBy(s => s.Length)
+                                .ToList();
+
+            if (!versionFolders.Any())
                 throw new Error($"Couldn't find a version number folder for clang in {llvmInstallDir}");
 
-            if (versionFolder.Length != 1)
-                throw new NotImplementedException($"More than one version folder found in {llvmInstallDir}, the code doesn't handle that (yet).");
+            // Consider only short version folders if any, else use longer version folders.
+            // VS2019 uses long version like "12.0.0" while VS2022 uses short version like "19".
+            // Also since VS2022 version 17.13, its possible to have more than one version in the lib/clang folder.
+            // Depending on installed VS components. Return the highest version number found.
+            var shortVersionFolders = versionFolders.Where(s => !s.Contains('.')).ToList();
+            string version;
+            if (shortVersionFolders.Any())
+            {
+                // Can't use System.Version for major version only.
+                version = shortVersionFolders.Max(v => int.Parse(v)).ToString();
+            }
+            else
+            {
+                // Use System.Version comparer to get the highest version.
+                version = versionFolders.Select(v => Version.Parse(v)).Max().ToString();
+            }
 
-            return Path.GetFileName(versionFolder[0]);
+            return version;
         }
 
         public class VsInstallation

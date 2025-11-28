@@ -29,6 +29,17 @@ namespace Sharpmake
                 Value8192,
             }
 
+            public enum RollForward
+            {
+                [Default]
+                Minor,
+                Major,
+                LatestPatch,
+                LatestMinor,
+                LatestMajor,
+                Disable,
+            }
+
             public enum CreateVsixContainer
             {
                 Enabled,
@@ -478,6 +489,9 @@ namespace Sharpmake
                 CSharp8,
                 CSharp9,
                 CSharp10,
+                CSharp11,
+                CSharp12,
+                CSharp13,
             }
 
             // Disable warning MSB3270 when disabled

@@ -180,7 +180,18 @@ namespace Sharpmake
                     Disable,
                     SWIFT4_0,
                     SWIFT4_2,
-                    SWIFT5_0
+                    SWIFT5_0,
+                    SWIFT6_0
+                }
+
+                public class SwiftModuleName : StringOption
+                {
+                    public SwiftModuleName(string value) : base(value) { }
+                    public static readonly string Default = "[project.LowerName]";
+                }
+
+                public class SwiftAdditionalCompilerOptions : OrderableStrings
+                {
                 }
 
                 public enum DeadStrip
@@ -264,6 +275,12 @@ namespace Sharpmake
                     Enable
                 }
 
+                public enum AsyncExceptions
+                {
+                    [Default]
+                    Disable,
+                    Enable
+                }
                 public class ExternalResourceFolders : Strings
                 {
                     public ExternalResourceFolders(params string[] paths)
@@ -450,6 +467,7 @@ namespace Sharpmake
                     Enable
                 }
 
+                [Obsolete("Deprecated and Ignored. Use `ApplePlatform.Settings.MacOSSDKPath` instead.", error: true)]
                 public class SDKRoot
                 {
                     public string Value;
@@ -592,10 +610,15 @@ namespace Sharpmake
                     Enable
                 }
 
+                /// <summary>
+                /// Testability is used for automated tests in XCode.
+                /// Activating it will disable other options, like stripping and private symbols.
+                /// See https://developer.apple.com/documentation/xcode/build-settings-reference#Enable-Testability
+                /// </summary>
                 public enum Testability
                 {
-                    [Default]
                     Enable,
+                    [Default]
                     Disable
                 }
 
@@ -823,6 +846,13 @@ namespace Sharpmake
                     [Default]
                     Enable
                 }
+
+                public enum UseHeaderMap
+                {
+                    [Default]
+                    Disable,
+                    Enable
+                }
             }
 
             /// <summary>
@@ -1009,29 +1039,17 @@ namespace Sharpmake
                        : base(value) { }
                 }
 
-                public class UISupportedInterfaceOrientations : UniqueList<UIInterfaceOrientation>
+                public class UISupportedInterfaceOrientations
                 {
+                    private UIInterfaceOrientation[] _uIInterfaceOrientations;
                     public UISupportedInterfaceOrientations(params UIInterfaceOrientation[] values)
-                        : base(EqualityComparer<UIInterfaceOrientation>.Default, values) { }
+                    {
+                        _uIInterfaceOrientations = values;
+                    }
 
                     public override string ToString()
                     {
-                        StringBuilder builder = new StringBuilder(Count * 128);
-                        bool first = true;
-                        foreach (UIInterfaceOrientation value in _hash)
-                        {
-                            if (!first)
-                                builder.Append(' ');
-                            else
-                                first = false;
-
-                            builder.Append(value.ToString());
-                        }
-
-                        if (_hash.Count > 1)
-                            return @$"""{builder.ToString()}""";
-
-                        return builder.ToString();
+                        return "\"" + string.Join(" ", _uIInterfaceOrientations) + "\"";
                     }
                 }
 
@@ -1113,11 +1131,48 @@ namespace Sharpmake
 
             public static class Linker
             {
+                /// <summary>
+                /// Enables symbols stripping after the binary is linked.
+                /// </summary>
                 public enum StripLinkedProduct
                 {
-                    Disable,
                     [Default]
+                    Disable,
                     Enable
+                }
+
+                /// <summary>
+                /// When stripping is enabled.
+                /// The level of symbol stripping to be performed on the linked product of the build.
+                /// </summary>
+                public enum StripStyle
+                {
+                    AllSymbols,           // Completely strips the binary, removing the symbol table and relocation information (strip option -s)
+                    NonGlobalSymbols,     // Strips non-global symbols, but saves external symbols (strip option -x)
+                    [Default]
+                    DebuggingSymbolsOnly  // Strips debugging symbols, but saves local and global symbols (strip option -S)
+                }
+
+                /// <summary>
+                /// When stripping is enabled.
+                /// Adjust the level of symbol stripping so that when the linked product of the build is stripped, all Swift symbols will be removed.
+                /// </summary>
+                public enum StripSwiftSymbols
+                {
+                    [Default]
+                    Disable,
+                    Enable
+                }
+
+                /// <summary>
+                /// Additional Strip Flags.
+                /// For a complete list, see documentation for /usr/bin/strip.
+                /// </summary>
+                public class AdditionalStripFlags : StringOption
+                {
+                    public AdditionalStripFlags(string value) : base(value)
+                    {
+                    }
                 }
 
                 /// <summary>
@@ -1152,6 +1207,17 @@ namespace Sharpmake
                     [Default]
                     Enable
                 }
+
+                /// <summary>
+                /// Sets an internal install path (LC_ID_DYLIB) in a dynamic library. Any clients linked against the library will record that path as the way dyld should locate this library.
+                /// </summary>
+                public class DyLibInstallName : StringOption
+                {
+                    public DyLibInstallName(string value) : base(value)
+                    {
+                    }
+                }
+
             }
 
             /// <summary>
@@ -1177,6 +1243,41 @@ namespace Sharpmake
                 {
                     public DebugArguments(List<string> args)
                         : base(args) 
+                    {
+                    }
+                }
+
+                public class EnvironmentVariables
+                {
+                    public Dictionary<string, string> Variables { get; set; } = new Dictionary<string, string>();
+                }
+
+                /// <summary>
+                /// This option can be used to set a custom runnable path in the scheme file for fastbuild targets
+                /// </summary>
+                public class CustomRunnablePath : PathOption
+                {
+                    public CustomRunnablePath(string path) : base(path)
+                    {
+                    }
+                }
+
+                /// <summary>
+                /// This option can be used to set a custom working directory
+                /// </summary>
+                public class CustomWorkingDirectory : PathOption
+                {
+                    public CustomWorkingDirectory(string path) : base(path)
+                    {
+                    }
+                }
+
+                /// <summary>
+                /// This option can be used to set a custom working directory
+                /// </summary>
+                public class CustomLLDBInitFile : PathOption
+                {
+                    public CustomLLDBInitFile(string path) : base(path)
                     {
                     }
                 }

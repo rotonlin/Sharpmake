@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using Sharpmake.Generators;
@@ -39,7 +40,6 @@ namespace Sharpmake.Application
 
         #region Log
 
-        private static DateTime s_startTime = DateTime.Now;
         public static bool DebugEnable = false;
         private static int s_errorCount = 0;
         private static int s_warningCount = 0;
@@ -55,7 +55,7 @@ namespace Sharpmake.Application
 
             if (DebugEnable)
             {
-                TimeSpan span = DateTime.Now - s_startTime;
+                TimeSpan span = DateTime.Now - Util.ProgramStartTime;
                 prefix = string.Format("[{0:00}:{1:00}] ", span.Minutes, span.Seconds);
                 message = prefix + message;
             }
@@ -438,7 +438,7 @@ namespace Sharpmake.Application
                 return;
 
             GetAssemblyInfo(extensionAssembly, out var extensionName, out var _, out var extensionVersion, out var extensionLocation);
-            LogWriteLine("    {0} {1} loaded from '{2}'", extensionName, extensionVersion, extensionLocation);
+            LogWriteLine("    {0} {1} loaded from '{2}' in assembly load context '{3}'", extensionName, extensionVersion, extensionLocation, AssemblyLoadContext.GetLoadContext(extensionAssembly).Name);
         }
 
         private static void CreateBuilderAndGenerate(BuildContext.BaseBuildContext buildContext, Argument parameters, bool generateDebugSolution)
@@ -491,7 +491,7 @@ namespace Sharpmake.Application
                 }
             }
 
-            LogWriteLine("  time: {0:0.00} sec.", (DateTime.Now - s_startTime).TotalSeconds);
+            LogWriteLine("  time: {0:0.00} sec.", (DateTime.Now - Util.ProgramStartTime).TotalSeconds);
             LogWriteLine("  completed on {0}.", DateTime.Now);
 
             if (generateDebugSolution)

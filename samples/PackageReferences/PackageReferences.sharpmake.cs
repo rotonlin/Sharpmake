@@ -3,6 +3,7 @@
 
 using System;
 using Sharpmake;
+using static Sharpmake.PackageReferences;
 
 namespace PackageReference
 {
@@ -40,10 +41,23 @@ namespace PackageReference
 
             conf.Options.Add(Options.CSharp.TreatWarningsAsErrors.Enabled);
 
+            // Avoid NuGet security vulnerabilities audit warnings breaks the build.
+            // .NET Framework 4.x has known vulnerabilities.
+            conf.Options.Add(new Options.CSharp.WarningsNotAsErrors("NU1901", "NU1902", "NU1903", "NU1904"));
+
             conf.ReferencesByNuGetPackage.Add("NUnit", "3.6.0");
             conf.ReferencesByNuGetPackage.Add("Newtonsoft.Json", "13.0.1");
-            conf.ReferencesByNuGetPackage.Add("Mono.Cecil", "0.9.6.4", privateAssets: Sharpmake.PackageReferences.AssetsDependency.All);
-            conf.ReferencesByNuGetPackage.Add("MySql.Data", "6.10.6", privateAssets: Sharpmake.PackageReferences.AssetsDependency.Build | Sharpmake.PackageReferences.AssetsDependency.Compile);
+            conf.ReferencesByNuGetPackage.Add("Mono.Cecil", "0.9.6.4", privateAssets: AssetsDependency.All);
+            conf.ReferencesByNuGetPackage.Add("MySql.Data", "6.10.6", privateAssets: AssetsDependency.Build | AssetsDependency.Compile);
+
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.Abstractions", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.All, excludeAssets: AssetsDependency.None, privateAssets: AssetsDependency.ContentFiles | AssetsDependency.Analyzers | AssetsDependency.Build);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.Analyzers, excludeAssets: AssetsDependency.None, privateAssets: AssetsDependency.ContentFiles | AssetsDependency.Analyzers | AssetsDependency.Build);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.Binder", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.All, excludeAssets: AssetsDependency.Compile, privateAssets: AssetsDependency.ContentFiles | AssetsDependency.Analyzers | AssetsDependency.Build);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.FileExtensions ", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.All, excludeAssets: AssetsDependency.None, privateAssets: AssetsDependency.All);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.Json", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.Analyzers, excludeAssets: AssetsDependency.Compile, privateAssets: AssetsDependency.ContentFiles | AssetsDependency.Analyzers | AssetsDependency.Build);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.EnvironmentVariables", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.All, excludeAssets: AssetsDependency.Compile, privateAssets: AssetsDependency.All);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.UserSecrets", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.Analyzers, excludeAssets: AssetsDependency.None, privateAssets: AssetsDependency.All);
+            conf.ReferencesByNuGetPackage.Add("Microsoft.Extensions.Configuration.CommandLine", "9.0.5", dotNetHint: null, includeAssets: AssetsDependency.Analyzers, excludeAssets: AssetsDependency.Compile, privateAssets: AssetsDependency.All);
         }
     }
 
@@ -118,7 +132,7 @@ namespace PackageReference
         [Main]
         public static void SharpmakeMain(Arguments arguments)
         {
-            KitsRootPaths.SetUseKitsRootForDevEnv(DevEnv.vs2022, KitsRootEnum.KitsRoot10, Options.Vc.General.WindowsTargetPlatformVersion.v10_0_17763_0);
+            KitsRootPaths.SetUseKitsRootForDevEnv(DevEnv.vs2022, KitsRootEnum.KitsRoot10, Options.Vc.General.WindowsTargetPlatformVersion.v10_0_22621_0);
             KitsRootPaths.SetUseKitsRootForDevEnv(DevEnv.vs2019, KitsRootEnum.KitsRoot10, Options.Vc.General.WindowsTargetPlatformVersion.v10_0_19041_0);
             arguments.Generate<PackageReferenceSolution>();
         }

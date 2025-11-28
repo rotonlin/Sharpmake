@@ -35,6 +35,7 @@ namespace Sharpmake
       <PreprocessToFile>[options.GeneratePreprocessedFile]</PreprocessToFile>
       <PreprocessSuppressLineNumbers>[options.PreprocessSuppressLineNumbers]</PreprocessSuppressLineNumbers>
       <PreprocessKeepComments>[options.KeepComments]</PreprocessKeepComments>
+      <UseStandardPreprocessor>[options.UseStandardConformingPreprocessor]</UseStandardPreprocessor>
       <StringPooling>[options.StringPooling]</StringPooling>
       <MinimalRebuild>[options.MinimalRebuild]</MinimalRebuild>
       <ExceptionHandling>[options.ExceptionHandling]</ExceptionHandling>
@@ -253,10 +254,10 @@ namespace Sharpmake
             @"  <PropertyGroup Condition=""'$(Configuration)|$(Platform)'=='[conf.Name]|[platformName]'"">
     <OutDir>[options.OutputDirectory]\</OutDir>
     <IntDir>[options.IntermediateDirectory]\</IntDir>
-    <NMakeBuildCommandLine>cd [relativeMasterBffPath]
+    <NMakeBuildCommandLine>cd [fastBuildWorkingDirectory]
 [conf.FastBuildCustomActionsBeforeBuildCommand]
 [fastBuildMakeCommandBuild] </NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>cd [relativeMasterBffPath]
+    <NMakeReBuildCommandLine>cd [fastBuildWorkingDirectory]
 [conf.FastBuildCustomActionsBeforeBuildCommand]
 [fastBuildMakeCommandRebuild] </NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>del ""[options.IntermediateDirectory]\*unity*.cpp"" &gt;NUL 2&gt;NUL
@@ -270,11 +271,18 @@ del ""[options.OutputDirectory]\[conf.TargetFileFullName].ilk"" &gt;NUL 2&gt;NUL
 del ""[options.OutputDirectory]\[conf.TargetFileFullName].lib"" &gt;NUL 2&gt;NUL
 del ""[options.OutputDirectory]\[conf.TargetFileFullName].pdb"" &gt;NUL 2&gt;NUL</NMakeCleanCommandLine>
     <NMakeOutput>[options.OutputFile]</NMakeOutput>
-    <NMakePreprocessorDefinitions>[EscapeXML:options.PreprocessorDefinitions]</NMakePreprocessorDefinitions>
-    <NMakeIncludeSearchPath>[options.AdditionalIncludeDirectories]</NMakeIncludeSearchPath>
+    <NMakePreprocessorDefinitions>[EscapeXML:options.PreprocessorDefinitions][EscapeXML:options.IntellisenseAdditionalDefines]</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>[options.NMakeIncludeSearchPath]</NMakeIncludeSearchPath>
     <NMakeForcedIncludes>[options.ForcedIncludeFiles]</NMakeForcedIncludes>
-    <AdditionalOptions>[options.AdditionalOptions]</AdditionalOptions>
+    <AdditionalOptions>[options.IntellisenseCommandLineOptions]</AdditionalOptions>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition=""'$(Configuration)|$(Platform)'=='[conf.Name]|[platformName]'"">
+    <NMakeCompile>
+      <NMakeCompileFileCommandLine>cd [fastBuildWorkingDirectory]
+[conf.FastBuildCustomActionsBeforeBuildCommand]
+[fastBuildMakeCommandCompileFile] </NMakeCompileFileCommandLine>
+    </NMakeCompile>
+  </ItemDefinitionGroup>
 ";
 
         private const string _projectConfigurationsCustomMakefile =
@@ -286,10 +294,24 @@ del ""[options.OutputDirectory]\[conf.TargetFileFullName].pdb"" &gt;NUL 2&gt;NUL
     <NMakeCleanCommandLine>[conf.CustomBuildSettings.CleanCommand]</NMakeCleanCommandLine>
     <NMakeOutput>[conf.CustomBuildSettings.OutputFile]</NMakeOutput>
     <NMakePreprocessorDefinitions>[EscapeXML:options.PreprocessorDefinitions]</NMakePreprocessorDefinitions>
-    <NMakeIncludeSearchPath>[options.AdditionalIncludeDirectories]</NMakeIncludeSearchPath>
+    <NMakeIncludeSearchPath>[options.NMakeIncludeSearchPath]</NMakeIncludeSearchPath>
     <NMakeForcedIncludes>[options.ForcedIncludeFiles]</NMakeForcedIncludes>
-    <AdditionalOptions>[options.AdditionalOptions]</AdditionalOptions>
+    <AdditionalOptions>[options.IntellisenseCommandLineOptions]</AdditionalOptions>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition=""'$(Configuration)|$(Platform)'=='[conf.Name]|[platformName]'"">
+    <NMakeCompile>
+      <NMakeCompileFileCommandLine>[conf.CustomBuildSettings.CompileFileCommand]</NMakeCompileFileCommandLine>
+    </NMakeCompile>
+  </ItemDefinitionGroup>
+";
+
+        private const string _projectConfigurationsNasmTemplate =
+    @"    <NASM>
+      <PreprocessorDefinitions>[EscapeXML:options.PreprocessorDefinitions];%(PreprocessorDefinitions);$(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <IncludePaths>[options.AdditionalAssemblyIncludeDirectories]</IncludePaths>
+      <Path>[ExePath]</Path>
+      <PreIncludeFiles>[PreIncludedFiles]</PreIncludeFiles>
+    </NASM>
 ";
     }
 }

@@ -641,19 +641,20 @@ namespace Sharpmake.Generators.FastBuild
 
             string envRemoveGuards = FileGeneratorUtilities.RemoveLineTag;
             string fastBuildEnvironments = string.Empty;
-            if (allDevEnv.Contains(DevEnv.xcode))
+
+            switch (Util.GetExecutingPlatform())
             {
-                // we'll keep the #if guards if we have other devenv in the file
-                if (allDevEnv.Count > 1)
-                {
-                    envRemoveGuards = string.Empty;
+                case Platform.win64:
                     fastBuildEnvironments += Bff.Template.ConfigurationFile.WinEnvironment;
-                }
-                fastBuildEnvironments += Bff.Template.ConfigurationFile.OsxEnvironment;
-            }
-            else
-            {
-                fastBuildEnvironments += Bff.Template.ConfigurationFile.WinEnvironment;
+                    break;
+                case Platform.mac:
+                    fastBuildEnvironments += Bff.Template.ConfigurationFile.OsxEnvironment;
+                    break;
+                case Platform.linux:
+                    fastBuildEnvironments += Bff.Template.ConfigurationFile.LinuxEnvironment;
+                    break;
+                default:
+                    throw new NotImplementedException($"Environment variables bff config not implemented for platform {Util.GetExecutingPlatform()}");
             }
 
             string envAdditionalVariables = FileGeneratorUtilities.RemoveLineTag;
@@ -663,6 +664,34 @@ namespace Sharpmake.Generators.FastBuild
             }
 
             using (masterBffGenerator.Declare("fastBuildProjectName", "Master"))
+            {
+                masterBffGenerator.Write(Bff.Template.ConfigurationFile.HeaderFile);
+            }
+
+            string concurrencyGroupList = FileGeneratorUtilities.RemoveLineTag;
+            if (FastBuildSettings.ConcurrencyGroups.Count > 0)
+            {
+                masterBffGenerator.WriteLine("//------------------------------");
+                masterBffGenerator.WriteLine("// Concurrency groups definition");
+                masterBffGenerator.WriteLine("//------------------------------");
+                List<string> groupSectionList = new List<string>();
+
+                foreach (var group in FastBuildSettings.ConcurrencyGroups)
+                {
+                    string groupSectionName = $".ConcurrencyGroup{group.Key}";
+                    groupSectionList.Add(groupSectionName); 
+
+                    using (masterBffGenerator.Declare("fastBuildConcurrencyGroupName", group.Key))
+                    using (masterBffGenerator.Declare("fastBuildConcurrencyGroupSectionName", groupSectionName))
+                    using (masterBffGenerator.Declare("fastBuildConcurrencyLimit", group.Value.ConcurrencyLimit.HasValue ? group.Value.ConcurrencyLimit.ToString() : FileGeneratorUtilities.RemoveLineTag))
+                    using (masterBffGenerator.Declare("fastBuildConcurrencyPerJobMiB", group.Value.ConcurrencyPerJobMiB.HasValue ? group.Value.ConcurrencyPerJobMiB : FileGeneratorUtilities.RemoveLineTag))
+                    {
+                        masterBffGenerator.Write(Bff.Template.ConfigurationFile.ConcurrencyGroup);
+                    }
+                }
+                concurrencyGroupList = UtilityMethods.FBuildFormatList(groupSectionList, 4, UtilityMethods.FBuildFormatListOptions.UseCommaBetweenElements);
+            }
+
             using (masterBffGenerator.Declare("CachePath", cachePath))
             using (masterBffGenerator.Declare("CachePluginDLL", cachePluginDLL))
             using (masterBffGenerator.Declare("WorkerConnectionLimit", workerConnectionLimit))
@@ -673,8 +702,8 @@ namespace Sharpmake.Generators.FastBuild
             using (masterBffGenerator.Declare("fastBuildEnvironments", fastBuildEnvironments))
             using (masterBffGenerator.Declare("envRemoveGuards", envRemoveGuards))
             using (masterBffGenerator.Declare("envAdditionalVariables", envAdditionalVariables))
+            using (masterBffGenerator.Declare("fastbuildConcurrencyGroupList", concurrencyGroupList))
             {
-                masterBffGenerator.Write(Bff.Template.ConfigurationFile.HeaderFile);
                 masterBffGenerator.Write(Bff.Template.ConfigurationFile.GlobalSettings);
             }
         }
@@ -745,6 +774,11 @@ namespace Sharpmake.Generators.FastBuild
                         using (masterBffGenerator.Declare("fastBuildResourceCompilerName", compConf.ResourceCompiler != FileGeneratorUtilities.RemoveLineTag ? "RC" + compilerConfiguration.Key : FileGeneratorUtilities.RemoveLineTag))
                         using (masterBffGenerator.Declare("fastBuildMasmCompiler", compConf.Masm))
                         using (masterBffGenerator.Declare("fastBuildMasmCompilerName", "ML" + compilerConfiguration.Key))
+
+                        // TODOANT make sure we have nasm compiler found and used.
+                        using (masterBffGenerator.Declare("fastBuildNasmCompiler", compConf.Nasm))
+                        using (masterBffGenerator.Declare("fastBuildNasmCompilerName", "Nasm" + compilerConfiguration.Key))
+
                         using (masterBffGenerator.Declare("fastBuildCompilerName", compConf.Compiler != FileGeneratorUtilities.RemoveLineTag ? compConf.Compiler : compiler.Key))
                         using (masterBffGenerator.Declare("fastBuildLibrarian", compConf.Librarian))
                         using (masterBffGenerator.Declare("fastBuildLinker", compConf.Linker))
@@ -758,6 +792,10 @@ namespace Sharpmake.Generators.FastBuild
 
                             if (!string.IsNullOrEmpty(compConf.Masm))
                                 masterBffGenerator.Write(Bff.Template.ConfigurationFile.MasmCompilerSettings);
+
+                            // TODOANT
+                            if (!string.IsNullOrEmpty(compConf.Nasm))
+                                masterBffGenerator.Write(Bff.Template.ConfigurationFile.NasmCompilerSettings);
 
                             masterBffGenerator.Write(Bff.Template.ConfigurationFile.CompilerConfiguration);
                         }

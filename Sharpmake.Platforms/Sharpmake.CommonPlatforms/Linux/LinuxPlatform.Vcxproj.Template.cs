@@ -79,6 +79,7 @@ namespace Sharpmake
     <LocalDebuggerCommandArguments>[conf.VcxprojUserFile.LocalDebuggerCommandArguments]</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>[conf.VcxprojUserFile.LocalDebuggerWorkingDirectory]</LocalDebuggerWorkingDirectory>
     <LocalDebuggerAttach>[conf.VcxprojUserFile.LocalDebuggerAttachString]</LocalDebuggerAttach>
+    <PreLaunchCommand>[conf.VcxprojUserFile.PreLaunchCommand]</PreLaunchCommand>
     <RemoteDebuggerCommand>[conf.VcxprojUserFile.RemoteDebuggerCommand]</RemoteDebuggerCommand>
     <RemoteDebuggerCommandArguments>[conf.VcxprojUserFile.RemoteDebuggerCommandArguments]</RemoteDebuggerCommandArguments>
     <RemoteDebuggingMode>[conf.VcxprojUserFile.RemoteDebuggingMode]</RemoteDebuggingMode>
@@ -123,10 +124,10 @@ namespace Sharpmake
     <RemoteBuildOutputs>[options.RemoteBuildOutputs]</RemoteBuildOutputs>
     <OutDir>[options.OutputDirectoryRemote]</OutDir>
     <IntDir>[options.IntermediateDirectoryRemote]</IntDir>
-    <BuildCommandLine>cd [relativeMasterBffPath]
+    <BuildCommandLine>cd [fastBuildWorkingDirectory]
 [conf.FastBuildCustomActionsBeforeBuildCommand]
 [fastBuildMakeCommandBuild]</BuildCommandLine>
-    <ReBuildCommandLine>cd [relativeMasterBffPath]
+    <ReBuildCommandLine>cd [fastBuildWorkingDirectory]
 [conf.FastBuildCustomActionsBeforeBuildCommand]
 [fastBuildMakeCommandRebuild]</ReBuildCommandLine>
     <LocalRemoteCopySources>[options.CopySources]</LocalRemoteCopySources>

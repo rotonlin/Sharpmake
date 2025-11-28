@@ -322,6 +322,10 @@ namespace Sharpmake
                     AndroidBuildTargets androidBuildtarget = Android.Util.GetAndroidBuildTarget(conf);
                     cmdLineOptions["ClangCompilerTarget"] = $"-target {Android.Util.GetTargetTripleWithVersionSuffix(androidBuildtarget, androidApiNum)}";
                 }
+                else
+                {
+                    cmdLineOptions["ClangCompilerTarget"] = RemoveLineTag;
+                }
 
                 context.SelectOptionWithFallback
                 (
@@ -398,12 +402,14 @@ namespace Sharpmake
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Cpp14, () => { options["CppLanguageStandard"] = "cpp14"; cmdLineOptions["CppLanguageStd"] = "-std=c++14"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Cpp1z, () => { options["CppLanguageStandard"] = "cpp1z"; cmdLineOptions["CppLanguageStd"] = "-std=c++1z"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Cpp17, () => { options["CppLanguageStandard"] = "cpp17"; cmdLineOptions["CppLanguageStd"] = "-std=c++17"; }),
+                Options.Option(Options.Agde.Compiler.CppLanguageStandard.Cpp20, () => { options["CppLanguageStandard"] = "cpp20"; cmdLineOptions["CppLanguageStd"] = "-std=c++20"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp98, () => { options["CppLanguageStandard"] = "gnupp98"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++98"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp03, () => { options["CppLanguageStandard"] = "gnupp03"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++03"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp11, () => { options["CppLanguageStandard"] = "gnupp11"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++11"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp14, () => { options["CppLanguageStandard"] = "gnupp14"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++14"; }),
                 Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp1z, () => { options["CppLanguageStandard"] = "gnupp1z"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++1z"; }),
-                Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp17, () => { options["CppLanguageStandard"] = "gnupp17"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++17"; })
+                Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp17, () => { options["CppLanguageStandard"] = "gnupp17"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++17"; }),
+                Options.Option(Options.Agde.Compiler.CppLanguageStandard.Gnupp20, () => { options["CppLanguageStandard"] = "gnupp20"; cmdLineOptions["CppLanguageStd"] = "-std=gnu++20"; })
                 );
 
                 context.SelectOption
@@ -616,7 +622,25 @@ namespace Sharpmake
 
             protected override IEnumerable<string> GetIncludePathsImpl(IGenerationContext context)
             {
-                return base.GetIncludePathsImpl(context);
+                var includePaths = new OrderableStrings();
+                includePaths.AddRange(context.Configuration.IncludePrivatePaths);
+                includePaths.AddRange(context.Configuration.IncludePaths);
+                includePaths.AddRange(context.Configuration.DependenciesIncludePaths);
+
+                includePaths.Sort();
+                return includePaths;
+            }
+
+            protected override IEnumerable<IncludeWithPrefix> GetPlatformIncludePathsWithPrefixImpl(IGenerationContext context)
+            {
+                var systemIncludes = new OrderableStrings();
+                systemIncludes.AddRange(context.Configuration.DependenciesIncludeSystemPaths);
+                systemIncludes.AddRange(context.Configuration.IncludeSystemPaths);
+
+                systemIncludes.Sort();
+
+                const string cmdLineIncludePrefix = "-isystem";
+                return systemIncludes.Select(path => new IncludeWithPrefix(cmdLineIncludePrefix, path));
             }
 
             public override IEnumerable<string> GetLibraryPaths(IGenerationContext context)
