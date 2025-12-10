@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace Sharpmake
@@ -3390,11 +3391,134 @@ namespace Sharpmake
             private List<Configuration> _resolvedDependencies;
             public IEnumerable<Configuration> ResolvedDependencies => _resolvedDependencies;
 
-            private List<Configuration> _resolvedPrivateDependencies;
-            public IEnumerable<Configuration> ResolvedPrivateDependencies => _resolvedPrivateDependencies;
+            public string AllModulesStr
+            {
+                get
+                {
+                    // Build module list by simulating configuration to get transitive dependencies
+                    // This avoids issues where ResolvedDependencies is not yet populated during token resolution
+                    var names = new List<string>();
+                    var seenNames = new HashSet<string>(StringComparer.Ordinal);
+                    var visitedConfigs = new HashSet<string>(StringComparer.Ordinal);
+
+                    bool IsCppProject(Type t)
+                    {
+                        return !typeof(CSharpProject).IsAssignableFrom(t);
+                    }
+
+                    void AddName(string name)
+                    {
+                        if (!string.IsNullOrEmpty(name) && name != Project.Name && seenNames.Add(name))
+                            names.Add(name);
+                    }
+
+                    void Traverse(Type type, ITarget target, bool isRoot)
+                    {
+                        // Avoid cycles
+                        var key = type.FullName + "|" + (target?.GetHashCode().ToString() ?? "null");
+                        if (!visitedConfigs.Add(key)) return;
+
+                        Project projInstance = null;
+                        if (isRoot)
+                        {
+                            projInstance = this.Project;
+                        }
+                        else
+                        {
+                            try { projInstance = Activator.CreateInstance(type) as Project; } catch { }
+                            if (projInstance == null) return;
+
+                            // Manually set ProjectType to avoid assertion failure in Construct
+                            if (type.GetCustomAttributes(typeof(Generate), true).Length > 0)
+                                projInstance._sharpmakeProjectType = ProjectTypeAttribute.Generate;
+                            else if (type.GetCustomAttributes(typeof(Export), true).Length > 0)
+                                projInstance._sharpmakeProjectType = ProjectTypeAttribute.Export;
+                            else if (type.GetCustomAttributes(typeof(Compile), true).Length > 0)
+                                projInstance._sharpmakeProjectType = ProjectTypeAttribute.Compile;
+
+                            if (!IsCppProject(type)) return;
+
+                            // Check EnableHeaderTools
+                            bool enable = false;
+                            try
+                            {
+                                var field = type.GetField("EnableHeaderTools", BindingFlags.Public | BindingFlags.Instance);
+                                if (field != null && field.FieldType == typeof(bool))
+                                {
+                                    enable = (bool)field.GetValue(projInstance);
+                                }
+                            }
+                            catch { }
+                            if (!enable) return;
+                        }
+
+                        // Get dependencies
+                        IEnumerable<KeyValuePair<Type, ITarget>> deps;
+                        if (isRoot)
+                        {
+                            var pub = UnResolvedPublicDependencies ?? new Dictionary<Type, ITarget>();
+                            var priv = UnResolvedPrivateDependencies ?? new Dictionary<Type, ITarget>();
+                            deps = pub.Concat(priv);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var conf = new Configuration();
+                                conf.Construct(projInstance, target);
+                                
+                                // Use reflection to invoke Configure since Project does not expose it directly
+                                var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
+                                                  .Where(m => m.Name == "Configure");
+                                
+                                foreach (var m in methods)
+                                {
+                                    var parameters = m.GetParameters();
+                                    if (parameters.Length == 2 && 
+                                        parameters[0].ParameterType.IsAssignableFrom(conf.GetType()) &&
+                                        parameters[1].ParameterType.IsAssignableFrom(target.GetType()))
+                                    {
+                                        m.Invoke(projInstance, new object[] { conf, target });
+                                        break;
+                                    }
+                                }
+
+                                var pub = conf.UnResolvedPublicDependencies ?? new Dictionary<Type, ITarget>();
+                                var priv = conf.UnResolvedPrivateDependencies ?? new Dictionary<Type, ITarget>();
+                                deps = pub.Concat(priv);
+                            }
+                            catch
+                            {
+                                deps = Enumerable.Empty<KeyValuePair<Type, ITarget>>();
+                            }
+                        }
+
+                        foreach (var kv in deps)
+                        {
+                            Traverse(kv.Key, kv.Value, false);
+                        }
+
+                        if (!isRoot && projInstance != null)
+                        {
+                            AddName(projInstance.Name);
+                        }
+                    }
+
+                    // Start traversal from this project
+                    if (this.Project != null && this.Target != null)
+                    {
+                        Traverse(this.Project.GetType(), this.Target, true);
+                    }
+
+                    return string.Join(",", names);
+                }
+            }
 
             private List<Configuration> _resolvedPublicDependencies;
             public IEnumerable<Configuration> ResolvedPublicDependencies => _resolvedPublicDependencies;
+
+            private List<Configuration> _resolvedPrivateDependencies;
+            public IEnumerable<Configuration> ResolvedPrivateDependencies => _resolvedPrivateDependencies;
 
             private static int SortConfigurationForLink(Configuration l, Configuration r)
             {
