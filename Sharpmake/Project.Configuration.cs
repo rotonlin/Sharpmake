@@ -3510,6 +3510,8 @@ namespace Sharpmake
                         Traverse(this.Project.GetType(), this.Target, true);
                     }
 
+                    names.Add(this.Project.Name); // Ensure own project name is last
+
                     return string.Join(",", names);
                 }
             }
